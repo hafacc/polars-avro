@@ -23,7 +23,7 @@ pyo3 = [
 ]
 
 [dependencies]
-arrow = { version = "59.0", default-features = false }
+arrow = { version = "60.0", default-features = false }
 arrow-avro = { version = "59.0", default-features = false }
 apache-avro = "0.22.0"
 serde_json = "1.0"
