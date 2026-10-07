@@ -154,8 +154,8 @@ impl PyAvroIter {
     }
 
     // Returning `Ok(None)` raises `StopIteration`.
-    fn __next__(&mut self) -> PyResult<Option<PyRecordBatch>> {
-        let batch = self.0.next().transpose()?;
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyRecordBatch>> {
+        let batch = py.detach(|| self.0.next()).transpose()?;
         Ok(batch.map(PyRecordBatch::from))
     }
 }
@@ -275,8 +275,9 @@ impl AvroSource {
 
     /// Return the file schema as a record batch without rows.
     #[pyo3(signature = ())]
-    fn schema(&mut self) -> PyResult<PyRecordBatch> {
-        Ok(RecordBatch::new_empty(self.get_schema()?).into())
+    fn schema(&mut self, py: Python<'_>) -> PyResult<PyRecordBatch> {
+        let schema = py.detach(|| self.get_schema())?;
+        Ok(RecordBatch::new_empty(schema).into())
     }
 
     #[pyo3(signature = (strict, utf8_view, batch_size, with_columns))]
@@ -342,17 +343,14 @@ impl AvroFileSink {
     }
 
     #[pyo3(signature = (table))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn write(&mut self, table: PyTable) -> Result<(), PyErr> {
-        for batch in table.batches() {
-            self.0.write(batch)?;
-        }
-        Ok(())
+    fn write(&mut self, py: Python<'_>, table: PyTable) -> Result<(), PyErr> {
+        let (batches, _) = table.into_inner();
+        Ok(py.detach(|| batches.iter().try_for_each(|batch| self.0.write(batch)))?)
     }
 
     #[pyo3(signature = ())]
-    fn close(&mut self) -> Result<(), PyErr> {
-        Ok(self.0.finish()?)
+    fn close(&mut self, py: Python<'_>) -> Result<(), PyErr> {
+        Ok(py.detach(|| self.0.finish())?)
     }
 }
 
@@ -373,17 +371,14 @@ impl AvroBuffSink {
     }
 
     #[pyo3(signature = (table))]
-    #[allow(clippy::needless_pass_by_value)]
-    fn write(&mut self, table: PyTable) -> Result<(), PyErr> {
-        for batch in table.batches() {
-            self.0.write(batch)?;
-        }
-        Ok(())
+    fn write(&mut self, py: Python<'_>, table: PyTable) -> Result<(), PyErr> {
+        let (batches, _) = table.into_inner();
+        Ok(py.detach(|| batches.iter().try_for_each(|batch| self.0.write(batch)))?)
     }
 
     #[pyo3(signature = ())]
-    fn close(&mut self) -> Result<(), PyErr> {
-        Ok(self.0.finish()?)
+    fn close(&mut self, py: Python<'_>) -> Result<(), PyErr> {
+        Ok(py.detach(|| self.0.finish())?)
     }
 }
 
