@@ -31,4 +31,4 @@ pyo3 = { version = "0.29", optional = true, features = ["abi3-py310"] }
 pyo3-arrow = { version = "0.19", optional = true, default-features = false }
 
 [dev-dependencies]
-uuid = "1.23.3"
+uuid = "1.26.1"
