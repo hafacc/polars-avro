@@ -220,6 +220,13 @@ def create_complex_frame(n: int) -> DataFrame:
             ),
         ),
         pytest.param(
+            pl.from_dict(
+                {"col": [{"a": 5}, None, {"c": 8, "f": -10}]},
+                schema={"col": pl.Map(pl.String, pl.Int32)},
+            ),
+            id="map",
+        ),
+        pytest.param(
             pl.from_dict({"col": [b"a", b"b", None]}, schema={"col": pl.Binary}),
             id="binary",
         ),
@@ -342,9 +349,7 @@ def test_noncontiguous_chunks(
 @pytest.mark.parametrize(
     "write_func,read_func",
     [
-        pytest.param(
-            DataFrame.write_avro, pl.read_avro, id="polars", marks=pytest.mark.xfail
-        ),
+        pytest.param(DataFrame.write_avro, pl.read_avro, id="polars"),
         pytest.param(polars_avro.write_avro, polars_avro.read_avro, id="polars_avro"),
     ],
 )
