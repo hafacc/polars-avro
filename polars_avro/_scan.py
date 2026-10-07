@@ -5,19 +5,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 import polars as pl
-import pyarrow as pa
 from polars import DataFrame, Expr, LazyFrame
 from polars.io.plugins import register_io_source
 
 from ._avro_rs import AvroSource
 from ._source import SourceFactory, cloud_factory, is_url, seekable_factory
-
-
-def _arrow_to_frame(data: pa.Table | pa.RecordBatch) -> DataFrame:
-    """Import a pyarrow table or record batch as a DataFrame."""
-    frame = pl.from_arrow(data)
-    assert isinstance(frame, DataFrame)
-    return frame
 
 
 def expand_str(source: str | Path, *, glob: bool) -> Iterator[str]:
@@ -96,7 +88,7 @@ def scan_avro(  # noqa: PLR0913
     src = AvroSource(all_sources)
 
     def get_schema() -> pl.Schema:
-        return _arrow_to_frame(src.schema().empty_table()).schema
+        return DataFrame(src.schema()).schema
 
     def source_generator(
         with_columns: list[str] | None,
@@ -108,7 +100,7 @@ def scan_avro(  # noqa: PLR0913
             strict, utf8_view, batch_size or def_batch_size, with_columns
         )
         for arrow_batch in avro_iter:
-            batch = _arrow_to_frame(arrow_batch)
+            batch = DataFrame(arrow_batch)
             if predicate is not None:
                 # importing the typed native module confuses pyright's view of
                 # DataFrame.filter here; the call is correct at runtime
