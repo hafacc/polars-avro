@@ -2,6 +2,7 @@
 name = "polars-avro"
 version = "0.12.0"
 description = "Polars io-plugin for reading and writing avro files"
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["polars>=2.0.0", "pyarrow>=7.0.0", "fsspec>=2024.0.0"]
