@@ -202,7 +202,7 @@ mod tests {
             Error::ColumnIndexOutOfBounds(7),
             Error::IO(io::Error::other("boom"), "path".into()),
         ] {
-            assert!(!format!("{err}").is_empty());
+            assert_ne!(format!("{err}"), "");
         }
     }
 

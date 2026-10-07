@@ -104,7 +104,7 @@ likely faster if you don't mind losing null string distinctions.
 | Avro Type                          | Polars Type                                   |
 | ---------------------------------- | --------------------------------------------- |
 | Enum                               | Categorical (not Enum)                        |
-| Map                                | List of Struct {key, value}                   |
+| Map                                | Map with String keys                          |
 | BigDecimal                         | Binary                                        |
 | Duration                           | unsupported (errors)                          |
 | Date                               | Date (days since epoch)                       |
