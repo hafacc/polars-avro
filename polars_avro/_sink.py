@@ -7,15 +7,14 @@ from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Self
 
-import polars as pl
-import pyarrow as pa
 from polars import DataFrame, Schema
+from polars._typing import ArrowStreamExportable
 
 from ._avro_rs import AvroBuffSink, AvroFileSink, Codec
 
 
 def create_writer(
-    schema: pa.Schema,
+    schema: ArrowStreamExportable,
     *,
     dest: str | Path | BinaryIO,
     codec: Codec | None = None,
@@ -44,29 +43,30 @@ class AvroWriter:
         schema: Schema | None = None,
         codec: Codec | None = None,
     ) -> None:
-        self._create: Callable[[pa.Schema], AvroBuffSink | AvroFileSink] = partial(
-            create_writer,
-            dest=dest,
-            codec=codec,
+        self._create: Callable[[ArrowStreamExportable], AvroBuffSink | AvroFileSink] = (
+            partial(
+                create_writer,
+                dest=dest,
+                codec=codec,
+            )
         )
         self._sink: AvroBuffSink | AvroFileSink | None = (
             None
             if schema is None
-            else self._create(pl.DataFrame(schema=schema).to_arrow().schema)
+            else self._create(DataFrame(schema=schema).to_arrow())
         )
 
     def __enter__(self) -> Self:
         return self
 
     def write(self, batch: DataFrame) -> None:
-        # to_arrow exports through pyarrow, which (unlike polars' own Arrow C
-        # export) emits spec-compliant Null arrays; see
+        # polars exports Null arrays with a buffer the Arrow spec says they
+        # don't have, which arrow-rs rejects; pyarrow re-exports them correctly
         # https://github.com/pola-rs/polars/issues/22934
         table = batch.to_arrow()
         if self._sink is None:
-            self._sink = self._create(table.schema)
-        for record_batch in table.to_batches():
-            self._sink.write(record_batch)
+            self._sink = self._create(table)
+        self._sink.write(table)
 
     def close(self) -> None:
         if self._sink is None:

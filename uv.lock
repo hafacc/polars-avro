@@ -1382,7 +1382,7 @@ dev = [
 requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "polars", specifier = ">=2.0.0" },
-    { name = "pyarrow", specifier = ">=7.0.0" },
+    { name = "pyarrow", specifier = ">=14.0.0" },
 ]
 
 [package.metadata.requires-dev]

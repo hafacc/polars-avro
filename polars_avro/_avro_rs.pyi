@@ -2,7 +2,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import BinaryIO
 
-import pyarrow as pa
+from polars._typing import ArrowStreamExportable
 
 class Codec:
     """A compression codec to use when writing Avro files.
@@ -17,11 +17,18 @@ class Codec:
     Xz: Codec
     Zstandard: Codec
 
+class RecordBatch:
+    """A batch of rows that polars can import without copying."""
+
+    def __arrow_c_array__(
+        self, requested_schema: object | None = None
+    ) -> tuple[object, object]: ...
+
 class AvroIter:
     """An iterator over the record batches of an avro source."""
 
     def __iter__(self) -> AvroIter: ...
-    def __next__(self) -> pa.RecordBatch: ...
+    def __next__(self) -> RecordBatch: ...
 
 class AvroSource:
     """A pseudo-iterator over Avro files.
@@ -36,7 +43,7 @@ class AvroSource:
         self,
         sources: list[str | Callable[[], AbstractContextManager[BinaryIO]]],
     ) -> None: ...
-    def schema(self) -> pa.Schema: ...
+    def schema(self) -> RecordBatch: ...
     def batch_iter(
         self,
         strict: bool,
@@ -46,19 +53,21 @@ class AvroSource:
     ) -> AvroIter: ...
 
 class AvroFileSink:
-    """A sink that writes record batches to a file."""
+    """A sink that writes tables to a file."""
 
-    def __init__(self, path: str, schema: pa.Schema, codec: Codec | None) -> None: ...
-    def write(self, batch: pa.RecordBatch) -> None: ...
+    def __init__(
+        self, path: str, schema: ArrowStreamExportable, codec: Codec | None
+    ) -> None: ...
+    def write(self, table: ArrowStreamExportable) -> None: ...
     def close(self) -> None: ...
 
 class AvroBuffSink:
-    """A sink that writes record batches to a writable binary buffer."""
+    """A sink that writes tables to a writable binary buffer."""
 
     def __init__(
-        self, buff: BinaryIO, schema: pa.Schema, codec: Codec | None
+        self, buff: BinaryIO, schema: ArrowStreamExportable, codec: Codec | None
     ) -> None: ...
-    def write(self, batch: pa.RecordBatch) -> None: ...
+    def write(self, table: ArrowStreamExportable) -> None: ...
     def close(self) -> None: ...
 
 class AvroError(Exception):

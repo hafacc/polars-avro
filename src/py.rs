@@ -1,6 +1,7 @@
 //! pyo3 bindings
 
 use super::{Error, ReadOptions, Reader, Writer, get_schema};
+use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_avro::compression::CompressionCodec;
 use pyo3::exceptions::{PyException, PyIOError, PyIndexError, PyKeyError, PyValueError};
@@ -9,7 +10,7 @@ use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRef, PyResult, Python, create_exception, pyclass,
     pymethods, pymodule,
 };
-use pyo3_arrow::{PyRecordBatch, PySchema};
+use pyo3_arrow::{PyRecordBatch, PyTable};
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs::File;
@@ -153,11 +154,9 @@ impl PyAvroIter {
     }
 
     // Returning `Ok(None)` raises `StopIteration`.
-    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match self.0.next().transpose()? {
-            Some(batch) => Ok(Some(PyRecordBatch::from(batch).into_pyarrow(py)?)),
-            None => Ok(None),
-        }
+    fn __next__(&mut self) -> PyResult<Option<PyRecordBatch>> {
+        let batch = self.0.next().transpose()?;
+        Ok(batch.map(PyRecordBatch::from))
     }
 }
 
@@ -274,10 +273,10 @@ impl AvroSource {
         }
     }
 
-    /// Return the file schema as a pyarrow `Schema`.
+    /// Return the file schema as a record batch without rows.
     #[pyo3(signature = ())]
-    fn schema<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        PySchema::new(self.get_schema()?).into_pyarrow(py)
+    fn schema(&mut self) -> PyResult<PyRecordBatch> {
+        Ok(RecordBatch::new_empty(self.get_schema()?).into())
     }
 
     #[pyo3(signature = (strict, utf8_view, batch_size, with_columns))]
@@ -334,18 +333,21 @@ pub struct AvroFileSink(Writer<BufWriter<File>>);
 impl AvroFileSink {
     #[new]
     #[pyo3(signature = (path, schema, codec=None))]
-    fn new(path: &str, schema: PySchema, codec: Option<Codec>) -> Result<Self, PyErr> {
+    fn new(path: &str, schema: PyTable, codec: Option<Codec>) -> Result<Self, PyErr> {
         Ok(Self(Writer::try_new(
             BufWriter::new(File::create(path)?),
-            schema.into_inner(),
+            schema.into_inner().1,
             codec.map(CompressionCodec::from),
         )?))
     }
 
-    #[pyo3(signature = (batch))]
+    #[pyo3(signature = (table))]
     #[allow(clippy::needless_pass_by_value)]
-    fn write(&mut self, batch: PyRecordBatch) -> Result<(), PyErr> {
-        Ok(self.0.write(batch.as_ref())?)
+    fn write(&mut self, table: PyTable) -> Result<(), PyErr> {
+        for batch in table.batches() {
+            self.0.write(batch)?;
+        }
+        Ok(())
     }
 
     #[pyo3(signature = ())]
@@ -362,18 +364,21 @@ pub struct AvroBuffSink(Writer<BufWriter<PyIO>>);
 impl AvroBuffSink {
     #[new]
     #[pyo3(signature = (buff, schema, codec=None))]
-    fn new(buff: Py<PyAny>, schema: PySchema, codec: Option<Codec>) -> Result<Self, PyErr> {
+    fn new(buff: Py<PyAny>, schema: PyTable, codec: Option<Codec>) -> Result<Self, PyErr> {
         Ok(Self(Writer::try_new(
             BufWriter::new(PyIO(Arc::new(buff))),
-            schema.into_inner(),
+            schema.into_inner().1,
             codec.map(CompressionCodec::from),
         )?))
     }
 
-    #[pyo3(signature = (batch))]
+    #[pyo3(signature = (table))]
     #[allow(clippy::needless_pass_by_value)]
-    fn write(&mut self, batch: PyRecordBatch) -> Result<(), PyErr> {
-        Ok(self.0.write(batch.as_ref())?)
+    fn write(&mut self, table: PyTable) -> Result<(), PyErr> {
+        for batch in table.batches() {
+            self.0.write(batch)?;
+        }
+        Ok(())
     }
 
     #[pyo3(signature = ())]
