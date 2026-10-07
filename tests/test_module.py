@@ -227,6 +227,31 @@ def create_complex_frame(n: int) -> DataFrame:
             id="map",
         ),
         pytest.param(
+            pl.from_dict(
+                {"col": [[{"a": 5}], None, [{"c": 8}, None]]},
+                schema={"col": pl.List(pl.Map(pl.String, pl.Int32))},
+            ),
+            id="list of maps",
+        ),
+        pytest.param(
+            pl.from_dict(
+                {"col": [{"map": {"a": [1.5]}}, {"map": None}]},
+                schema={
+                    "col": pl.Struct(
+                        {"map": pl.Map(pl.String, pl.Array(pl.Float64, 1))}
+                    )
+                },
+            ),
+            id="struct of map",
+        ),
+        pytest.param(
+            pl.from_dict(
+                {"col": [[None], []]},
+                schema={"col": pl.List(pl.Null)},
+            ),
+            id="list of nulls",
+        ),
+        pytest.param(
             pl.from_dict({"col": [b"a", b"b", None]}, schema={"col": pl.Binary}),
             id="binary",
         ),
