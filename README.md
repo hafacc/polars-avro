@@ -1,8 +1,8 @@
 # polars-avro
 
-[![build](https://github.com/hafaio/polars-avro/actions/workflows/build.yml/badge.svg)](https://github.com/hafaio/polars-avro/actions/workflows/build.yml)
+[![build](https://github.com/hafacc/polars-avro/actions/workflows/build.yml/badge.svg)](https://github.com/hafacc/polars-avro/actions/workflows/build.yml)
 [![pypi](https://img.shields.io/pypi/v/polars-avro)](https://pypi.org/project/polars-avro/)
-[![docs](https://img.shields.io/badge/api-docs-blue)](https://hafaio.github.io/polars-avro)
+[![docs](https://img.shields.io/badge/api-docs-blue)](https://hafa.cc/polars-avro)
 
 A polars io plugin for reading and writing
 [Apache Avro](https://avro.apache.org/) files, built on
