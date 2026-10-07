@@ -260,11 +260,10 @@ def test_read_map_type() -> None:
         values,
     )
     buff.seek(0)
-    # we need to sort the list to guarantee order for comparison
-    res = scan_avro(buff).select(pl.col("map").list.sort()).collect()  # type: ignore
+    res = read_avro(buff)
     expected = pl.from_dict(
-        {"map": [[["a", 5]], None, [["c", 8], ["f", -10]]]},
-        schema={"map": pl.List(pl.Struct({"key": pl.String, "value": pl.Int32}))},
+        {"map": [{"a": 5}, None, {"c": 8, "f": -10}]},
+        schema={"map": pl.Map(pl.String, pl.Int32)},
     )
     assert res.equals(expected)
 
