@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping, Sequence
-from glob import iglob
-from os import path
+from glob import has_magic, iglob
+from os import path, walk
 from pathlib import Path
 from typing import BinaryIO
 
@@ -12,19 +12,36 @@ from ._avro_rs import AvroSource
 from ._source import SourceFactory, cloud_factory, is_url, seekable_factory
 
 
+def _has_content(file: str) -> bool:
+    """Return whether ``file`` is a file polars would read: one that isn't empty."""
+    return path.isfile(file) and path.getsize(file) > 0
+
+
 def expand_str(source: str | Path, *, glob: bool) -> Iterator[str]:
     """Expand a string or Path to a list of file paths."""
     expanded = path.expanduser(path.expandvars(source))
-    if glob and "*" in expanded:
-        matches = sorted(iglob(expanded))
-        if not matches:
-            raise FileNotFoundError(f"no files matched glob pattern: {expanded}")
-        else:
-            yield from matches
-    elif path.isdir(expanded):
-        matches = sorted(iglob(path.join(expanded, "*")))
+    if path.isdir(expanded):
+        matches = sorted(
+            file
+            for parent, _, names in walk(expanded)
+            for file in (path.join(parent, name) for name in names)
+            if _has_content(file)
+        )
+        extensions = {path.splitext(file)[1] for file in matches}
         if not matches:
             raise FileNotFoundError(f"no files found in directory: {expanded}")
+        elif len(extensions) > 1:
+            raise ValueError(
+                f"directory contains files with different extensions "
+                f"({', '.join(sorted(extensions))}), use a glob pattern to pick "
+                f"which to read: {expanded}"
+            )
+        else:
+            yield from matches
+    elif glob and has_magic(expanded):
+        matches = sorted(filter(_has_content, iglob(expanded, recursive=True)))
+        if not matches:
+            raise FileNotFoundError(f"no files matched glob pattern: {expanded}")
         else:
             yield from matches
     else:
