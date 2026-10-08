@@ -1,6 +1,6 @@
 //! pyo3 bindings
 
-use super::{Error, Projection, ReadOptions, Reader, Writer, get_schema};
+use super::{Error, Projection, ReadOptions, Reader, Writer};
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_avro::compression::CompressionCodec;
@@ -235,6 +235,8 @@ impl Seek for PyIO {
 #[derive(Debug, Clone)]
 pub struct AvroSource {
     sources: Arc<[Source]>,
+    strict: bool,
+    utf8_view: bool,
     schema: Option<SchemaRef>,
 }
 
@@ -255,7 +257,12 @@ impl AvroSource {
                 .next()
                 .ok_or(Error::EmptySources)?
                 .map_err(Error::User)?;
-            let schema = get_schema(first).map_err(Error::widen)?;
+            let options = ReadOptions {
+                strict: self.strict,
+                utf8_view: self.utf8_view,
+                ..ReadOptions::default()
+            };
+            let schema = options.schema(first).map_err(Error::widen)?;
             self.schema = Some(schema.clone());
             Ok(schema)
         }
@@ -265,10 +272,12 @@ impl AvroSource {
 #[pymethods]
 impl AvroSource {
     #[new]
-    #[pyo3(signature = (sources))]
-    fn new(sources: Vec<Source>) -> Self {
+    #[pyo3(signature = (sources, strict, utf8_view))]
+    fn new(sources: Vec<Source>, strict: bool, utf8_view: bool) -> Self {
         Self {
             sources: sources.into(),
+            strict,
+            utf8_view,
             schema: None,
         }
     }
@@ -280,12 +289,10 @@ impl AvroSource {
         Ok(RecordBatch::new_empty(schema).into())
     }
 
-    #[pyo3(signature = (strict, utf8_view, batch_size, with_columns))]
+    #[pyo3(signature = (batch_size, with_columns))]
     #[allow(clippy::needless_pass_by_value)]
     fn batch_iter(
         &mut self,
-        strict: bool,
-        utf8_view: bool,
         batch_size: usize,
         with_columns: Option<Vec<String>>,
     ) -> PyResult<PyAvroIter> {
@@ -293,8 +300,8 @@ impl AvroSource {
             Reader::try_new(
                 self.get_sources(),
                 ReadOptions {
-                    strict,
-                    utf8_view,
+                    strict: self.strict,
+                    utf8_view: self.utf8_view,
                     batch_size,
                     projection: with_columns.map(Projection::Names),
                 },

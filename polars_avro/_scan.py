@@ -85,7 +85,7 @@ def scan_avro(  # noqa: PLR0913
 
     def_batch_size = batch_size
 
-    src = AvroSource(all_sources)
+    src = AvroSource(all_sources, strict, utf8_view)
 
     def get_schema() -> pl.Schema:
         return DataFrame(src.schema()).schema
@@ -96,14 +96,11 @@ def scan_avro(  # noqa: PLR0913
         n_rows: int | None,
         batch_size: int | None,
     ) -> Iterator[DataFrame]:
-        avro_iter = src.batch_iter(
-            strict, utf8_view, batch_size or def_batch_size, with_columns
-        )
+        avro_iter = src.batch_iter(batch_size or def_batch_size, with_columns)
         for arrow_batch in avro_iter:
             batch = DataFrame(arrow_batch)
             if predicate is not None:
-                # importing the typed native module confuses pyright's view of
-                # DataFrame.filter here; the call is correct at runtime
+                # pyright mistypes filter once the native module is imported
                 batch = batch.filter(predicate)  # type: ignore[reportUnknownMemberType]
             if n_rows is None:
                 yield batch
@@ -114,8 +111,7 @@ def scan_avro(  # noqa: PLR0913
                 if n_rows == 0:
                     break
 
-    # type errors with callable schema
-    # https://github.com/pola-rs/polars/issues/22182
+    # callable schemas are mistyped: https://github.com/pola-rs/polars/issues/22182
     return register_io_source(source_generator, schema=get_schema)  # type: ignore[reportArgumentType]
 
 
@@ -170,8 +166,7 @@ def read_avro(  # noqa: PLR0913
         storage_options=storage_options,
     )
     if columns is not None:
-        # see the filter note in scan_avro: the native import perturbs pyright's
-        # view of LazyFrame.select; correct at runtime
+        # pyright mistypes select too, as with filter in scan_avro
         lazy = lazy.select(  # type: ignore[reportUnknownMemberType]
             [pl.nth(c) if isinstance(c, int) else pl.col(c) for c in columns]
         )

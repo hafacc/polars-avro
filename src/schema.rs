@@ -1,6 +1,5 @@
-use super::Error;
+use super::{Error, ReadOptions};
 use arrow::datatypes::SchemaRef;
-use arrow_avro::reader::ReaderBuilder;
 use std::io::BufRead;
 
 /// Get an arrow schema from an avro reader
@@ -8,8 +7,7 @@ use std::io::BufRead;
 /// # Errors
 /// If the avro schema can't be read, or any errors from the reader
 pub fn get_schema<R: BufRead>(reader: R) -> Result<SchemaRef, Error> {
-    let reader = ReaderBuilder::new().build(reader)?;
-    Ok(reader.schema())
+    ReadOptions::default().schema(reader)
 }
 
 #[cfg(test)]
