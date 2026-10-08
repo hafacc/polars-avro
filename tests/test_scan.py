@@ -209,6 +209,47 @@ def test_empty_directory_errors(tmp_path: Path) -> None:
         scan_avro(str(tmp_path))
 
 
+def test_directory_reads_nested_files(tmp_path: Path) -> None:
+    """Like polars, a directory is read recursively and empty files skipped."""
+    frame = pl.from_dict({"x": [1, 2]})
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    write_avro(frame, tmp_path / "a.avro")
+    write_avro(frame, nested / "b.avro")
+    (tmp_path / "empty.avro").touch()
+    assert read_avro(tmp_path).equals(pl.concat([frame, frame]))
+
+
+def test_directory_mixed_extensions_errors(tmp_path: Path) -> None:
+    """Like polars, a directory of different kinds of files is ambiguous."""
+    write_avro(pl.from_dict({"x": [1]}), tmp_path / "a.avro")
+    (tmp_path / "notes.txt").write_text("not avro")
+    with pytest.raises(ValueError, match="different extensions"):
+        scan_avro(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "pattern,files",
+    [
+        ("?.avro", 2),
+        ("[ab].avro", 2),
+        ("*", 2),
+        ("**/*.avro", 3),
+    ],
+)
+def test_glob_patterns(tmp_path: Path, pattern: str, files: int) -> None:
+    """Like polars, every wildcard expands, and only to files that aren't empty."""
+    frame = pl.from_dict({"x": [1, 2]})
+    nested = tmp_path / "c"
+    nested.mkdir()
+    write_avro(frame, tmp_path / "a.avro")
+    write_avro(frame, tmp_path / "b.avro")
+    write_avro(frame, nested / "d.avro")
+    (tmp_path / "e.avro").touch()
+    res = read_avro(str(tmp_path / pattern))
+    assert res.equals(pl.concat([frame] * files))
+
+
 def test_batch_size_must_be_positive() -> None:
     """A batch size that could never yield rows is rejected."""
     with pytest.raises(ValueError, match="batch_size must be positive"):
