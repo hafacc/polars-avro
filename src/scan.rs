@@ -1,20 +1,25 @@
 //! Rust scan implementation
 
 use super::Error;
-use super::Projection;
-use apache_avro::Reader as AvroReader;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
-use arrow_avro::reader::{Reader as ArrowAvroReader, ReaderBuilder};
-use arrow_avro::schema::AvroSchema;
-use std::convert::Infallible;
-use std::io::{BufReader, Read, Seek};
+use arrow_avro::reader::{Reader as ArrowAvroReader, ReaderBuilder, read_header_info};
+use std::io::{BufRead, Seek};
 use std::iter::FusedIterator;
 use std::sync::Arc;
 
+/// The columns to read, in output order
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Projection {
+    /// Columns by name
+    Names(Vec<String>),
+    /// Columns by position in the file
+    Indices(Vec<usize>),
+}
+
 /// Configuration options for the avro reader
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadOptions<P = Infallible> {
+pub struct ReadOptions {
     /// Enable stricter avro union handling: reject unions where `null` is not
     /// the first branch (`[T, "null"]` rather than `["null", T]`) instead of
     /// accepting them.
@@ -28,13 +33,10 @@ pub struct ReadOptions<P = Infallible> {
     /// The batch size for reading
     pub batch_size: usize,
     /// The columns to select
-    pub projection: Option<P>,
+    pub projection: Option<Projection>,
 }
 
-/// Read options without projection
-pub type FullReadOptions = ReadOptions<Infallible>;
-
-impl<P> Default for ReadOptions<P> {
+impl Default for ReadOptions {
     fn default() -> Self {
         Self {
             strict: false,
@@ -45,35 +47,36 @@ impl<P> Default for ReadOptions<P> {
     }
 }
 
-impl<P: Projection> ReadOptions<P> {
-    fn create_reader<R: Read + Seek>(
-        &self,
-        reader: R,
-    ) -> Result<ArrowAvroReader<BufReader<R>>, Error> {
-        let mut builder = ReaderBuilder::new()
+impl ReadOptions {
+    fn builder(&self) -> ReaderBuilder {
+        ReaderBuilder::new()
             .with_utf8_view(self.utf8_view)
             .with_strict_mode(self.strict)
-            .with_batch_size(self.batch_size);
-        let mut buf_reader = BufReader::new(reader);
-        if let Some(proj) = &self.projection {
-            // To do a projection we need to supply a schema, but arrow-avro
-            // doesn't keep the metadata necessary for ensuing a match
-            let orig = buf_reader.stream_position()?;
-            let projected = {
-                let reader = AvroReader::new(&mut buf_reader)?;
-                proj.project(reader.writer_schema())?
-            };
-            // we use seek_relative to avoid flishing the buffer
-            let cur = buf_reader.stream_position()?;
-            let seek = orig.checked_signed_diff(cur).ok_or(Error::LargeHeader)?;
-            buf_reader.seek_relative(seek)?;
-            // serialize the full schema, not `canonical_form()`: parsing
-            // canonical form drops `logicalType`, which would silently decode
-            // dates/timestamps/decimals/uuids as their raw primitives
-            builder =
-                builder.with_reader_schema(AvroSchema::new(serde_json::to_string(&projected)?));
-        }
-        Ok(builder.build(buf_reader)?)
+            .with_batch_size(self.batch_size)
+    }
+
+    fn create_reader<R: BufRead + Seek>(&self, mut reader: R) -> Result<ArrowAvroReader<R>, Error> {
+        let builder = match &self.projection {
+            None => self.builder(),
+            Some(Projection::Indices(indices)) => self.builder().with_projection(indices.clone()),
+            Some(Projection::Names(names)) => {
+                // arrow-avro selects by position, and only the header maps names to one
+                let header = read_header_info(&mut reader)?;
+                let rewind = i64::try_from(header.header_len()).map_err(|_| Error::LargeHeader)?;
+                // a BufReader rewinds inside its buffer when the header fits in it
+                reader.seek_relative(-rewind)?;
+                let schema = self.builder().build(&mut reader)?.schema();
+                reader.seek_relative(-rewind)?;
+                let indices = names.iter().map(|name| {
+                    schema
+                        .index_of(name)
+                        .map_err(|_| Error::ColumnNotFound(name.clone()))
+                });
+                self.builder()
+                    .with_projection(indices.collect::<Result<_, _>>()?)
+            }
+        };
+        Ok(builder.build(reader)?)
     }
 }
 
@@ -81,19 +84,21 @@ impl<P: Projection> ReadOptions<P> {
 ///
 /// All sources must share the same schema; a [`Error::NonMatchingSchemas`]
 /// error is returned if they differ.
+///
+/// Sources are read as given, so wrap an unbuffered one (like a
+/// [`File`](std::fs::File)) in a [`BufReader`](std::io::BufReader).
 #[derive(Debug)]
-pub struct Reader<R: Read, I, C> {
+pub struct Reader<R: BufRead, I> {
     sources: I,
-    source: ArrowAvroReader<BufReader<R>>,
-    options: ReadOptions<C>,
+    source: ArrowAvroReader<R>,
+    options: ReadOptions,
     schema: Arc<Schema>,
 }
 
-impl<R, E, I, P> Reader<R, I, P>
+impl<R, E, I> Reader<R, I>
 where
-    R: Read + Seek,
+    R: BufRead + Seek,
     I: Iterator<Item = Result<R, E>>,
-    P: Projection,
 {
     /// Create a new iterator from sources and a config
     ///
@@ -102,7 +107,7 @@ where
     /// source
     pub fn try_new(
         sources: impl IntoIterator<IntoIter = I>,
-        config: ReadOptions<P>,
+        config: ReadOptions,
     ) -> Result<Self, Error<E>> {
         let mut sources = sources.into_iter();
         let first = sources
@@ -124,11 +129,10 @@ where
     }
 }
 
-impl<R, E, I, P> Iterator for Reader<R, I, P>
+impl<R, E, I> Iterator for Reader<R, I>
 where
-    R: Read + Seek,
+    R: BufRead + Seek,
     I: Iterator<Item = Result<R, E>>,
-    P: Projection,
 {
     type Item = Result<RecordBatch, Error<E>>;
 
@@ -161,17 +165,16 @@ where
     }
 }
 
-impl<R, E, I, P> FusedIterator for Reader<R, I, P>
+impl<R, E, I> FusedIterator for Reader<R, I>
 where
-    R: Read + Seek,
+    R: BufRead + Seek,
     I: Iterator<Item = Result<R, E>> + FusedIterator,
-    P: Projection,
 {
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, FullReadOptions, Projection, ReadOptions, Reader};
+    use super::{Error, Projection, ReadOptions, Reader};
     use apache_avro::schema::{
         DecimalSchema, FixedSchema, InnerDecimalSchema, Name, RecordField, Schema, UnionSchema,
         UuidSchema,
@@ -186,7 +189,7 @@ mod tests {
     use std::convert::Infallible;
     use std::error::Error as StdError;
     use std::fs::File;
-    use std::io::{Cursor, Read, Seek};
+    use std::io::{BufRead, BufReader, Cursor, Read, Seek};
     use std::mem;
     use uuid::Uuid;
 
@@ -195,13 +198,17 @@ mod tests {
         Ok(val)
     }
 
+    fn names(columns: &[&str]) -> Projection {
+        let columns = columns.iter().map(|column| (*column).to_owned());
+        Projection::Names(columns.collect())
+    }
+
     /// Drain a reader and concatenate all of its batches into one.
-    fn collect_one<R, E, I, P>(reader: Reader<R, I, P>) -> RecordBatch
+    fn collect_one<R, E, I>(reader: Reader<R, I>) -> RecordBatch
     where
-        R: Read + Seek,
+        R: BufRead + Seek,
         E: StdError,
         I: Iterator<Item = Result<R, E>>,
-        P: Projection,
     {
         let batches: Vec<RecordBatch> = reader.map(|batch| batch.unwrap()).collect();
         let schema = batches
@@ -256,8 +263,8 @@ mod tests {
     #[test]
     fn test_scan() {
         let batches = Reader::try_new(
-            [File::open("./resources/food.avro")],
-            FullReadOptions::default(),
+            [File::open("./resources/food.avro").map(BufReader::new)],
+            ReadOptions::default(),
         )
         .unwrap();
         let frame = collect_one(batches);
@@ -270,9 +277,9 @@ mod tests {
     fn test_reorder() {
         let columns = ["sugars_g", "calories"];
         let batches = Reader::try_new(
-            [File::open("./resources/food.avro")],
+            [File::open("./resources/food.avro").map(BufReader::new)],
             ReadOptions {
-                projection: Some(&columns[..]),
+                projection: Some(names(&columns)),
                 ..ReadOptions::default()
             },
         )
@@ -287,11 +294,43 @@ mod tests {
         assert_eq!(names, columns);
     }
 
+    /// Columns can be selected by position
+    #[test]
+    fn test_reorder_by_position() {
+        let batches = Reader::try_new(
+            [File::open("./resources/food.avro").map(BufReader::new)],
+            ReadOptions {
+                projection: Some(Projection::Indices(vec![3, 1])),
+                ..ReadOptions::default()
+            },
+        )
+        .unwrap();
+        let schema = collect_one(batches).schema();
+        let names: Vec<&str> = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        assert_eq!(names, ["sugars_g", "calories"]);
+    }
+
+    #[test]
+    fn test_position_out_of_bounds_error() {
+        let res = Reader::try_new(
+            [File::open("./resources/food.avro").map(BufReader::new)],
+            ReadOptions {
+                projection: Some(Projection::Indices(vec![99])),
+                ..ReadOptions::default()
+            },
+        );
+        assert!(matches!(res, Err(Error::Arrow(_))));
+    }
+
     /// Avro bytes are read as an arrow binary type
     #[test]
     fn test_bytes() {
         let buff = write_avro("bytes", Schema::Bytes, [&b"test"[..], &b"another"[..]]).unwrap();
-        let frame = collect_one(Reader::try_new([ok(buff)], FullReadOptions::default()).unwrap());
+        let frame = collect_one(Reader::try_new([ok(buff)], ReadOptions::default()).unwrap());
         assert_eq!(frame.num_rows(), 2);
         assert!(is_binary_type(frame.column(0).data_type()));
     }
@@ -308,7 +347,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let frame = collect_one(Reader::try_new([ok(buff)], FullReadOptions::default()).unwrap());
+        let frame = collect_one(Reader::try_new([ok(buff)], ReadOptions::default()).unwrap());
         assert_eq!(frame.column(0).data_type(), &DataType::FixedSizeBinary(4));
     }
 
@@ -328,7 +367,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let frame = collect_one(Reader::try_new([ok(buff)], FullReadOptions::default()).unwrap());
+        let frame = collect_one(Reader::try_new([ok(buff)], ReadOptions::default()).unwrap());
         assert_eq!(frame.column(0).data_type(), &DataType::Decimal128(10, 2));
     }
 
@@ -348,7 +387,7 @@ mod tests {
                 [ok(buff)],
                 ReadOptions {
                     utf8_view: false,
-                    ..FullReadOptions::default()
+                    ..ReadOptions::default()
                 },
             )
             .unwrap(),
@@ -372,7 +411,7 @@ mod tests {
                 [ok(buff)],
                 ReadOptions {
                     utf8_view: true,
-                    ..FullReadOptions::default()
+                    ..ReadOptions::default()
                 },
             )
             .unwrap(),
@@ -394,7 +433,7 @@ mod tests {
                 [ok(buff)],
                 ReadOptions {
                     utf8_view: false,
-                    ..FullReadOptions::default()
+                    ..ReadOptions::default()
                 },
             )
             .unwrap(),
@@ -417,7 +456,7 @@ mod tests {
                 [ok(buff)],
                 ReadOptions {
                     utf8_view: true,
-                    ..FullReadOptions::default()
+                    ..ReadOptions::default()
                 },
             )
             .unwrap(),
@@ -432,7 +471,7 @@ mod tests {
         let valid = write_avro("col", Schema::Int, [1, 2, 3]).unwrap();
         let sources: Vec<Result<Cursor<Vec<u8>>, std::io::Error>> =
             vec![Ok(valid), Err(std::io::Error::other("boom"))];
-        let mut reader = Reader::try_new(sources, FullReadOptions::default()).unwrap();
+        let mut reader = Reader::try_new(sources, ReadOptions::default()).unwrap();
         let last = reader.by_ref().last().unwrap();
         assert!(matches!(last, Err(Error::User(_))));
     }
@@ -479,16 +518,16 @@ mod tests {
             .unwrap()
             .into_inner();
         assert!(bytes.len() > 8192, "need a multi-buffer file");
-        let source = FailOnceReader {
+        let source = BufReader::new(FailOnceReader {
             fail_at: u64::try_from(bytes.len()).unwrap() / 2,
             data: Cursor::new(bytes),
             failed: false,
-        };
+        });
         let mut reader = Reader::try_new(
             [ok(source)],
             ReadOptions {
                 batch_size: 2,
-                ..FullReadOptions::default()
+                ..ReadOptions::default()
             },
         )
         .unwrap();
@@ -503,7 +542,7 @@ mod tests {
     #[test]
     fn test_empty_sources_error() {
         let sources: Vec<Result<Cursor<Vec<u8>>, std::io::Error>> = Vec::new();
-        let err = Reader::try_new(sources, FullReadOptions::default()).unwrap_err();
+        let err = Reader::try_new(sources, ReadOptions::default()).unwrap_err();
         assert!(matches!(err, Error::EmptySources));
     }
 
@@ -511,7 +550,7 @@ mod tests {
     fn test_first_source_error() {
         let sources: Vec<Result<Cursor<Vec<u8>>, std::io::Error>> =
             vec![Err(std::io::Error::other("boom"))];
-        let err = Reader::try_new(sources, FullReadOptions::default()).unwrap_err();
+        let err = Reader::try_new(sources, ReadOptions::default()).unwrap_err();
         assert!(matches!(err, Error::User(_)));
     }
 
@@ -520,146 +559,58 @@ mod tests {
         let err = Reader::try_new(
             [ok(Cursor::new(b"not an avro file".to_vec()))],
             ReadOptions {
-                projection: Some(&["x"][..]),
+                projection: Some(names(&["x"])),
                 ..ReadOptions::default()
             },
         )
         .unwrap_err();
         assert!(
-            matches!(err, Error::Avro(_) | Error::Arrow(_) | Error::ArrowAvro(_)),
+            matches!(err, Error::Arrow(_) | Error::ArrowAvro(_)),
             "{err:?}"
         );
     }
 
-    /// Serves valid data but fails after `ok_seeks` successful seeks, to exercise
-    /// the seek error paths in the projection branch of `create_reader`.
+    /// Serves valid data but fails every seek.
     #[derive(Debug)]
-    struct FailSeekAfter {
-        data: Cursor<Vec<u8>>,
-        ok_seeks: usize,
-    }
+    struct NoSeek(Cursor<Vec<u8>>);
 
-    impl Read for FailSeekAfter {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.data.read(buf)
-        }
-    }
-
-    impl Seek for FailSeekAfter {
-        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-            if self.ok_seeks == 0 {
-                return Err(std::io::Error::other("no seek"));
-            }
-            self.ok_seeks -= 1;
-            self.data.seek(pos)
-        }
-    }
-
-    fn projection_with_seeks(ok_seeks: usize) -> Error {
-        let valid = write_avro("col", Schema::Int, [1, 2, 3])
-            .unwrap()
-            .into_inner();
-        Reader::try_new(
-            [ok(FailSeekAfter {
-                data: Cursor::new(valid),
-                ok_seeks,
-            })],
-            ReadOptions {
-                projection: Some(&["col"][..]),
-                ..ReadOptions::default()
-            },
-        )
-        .unwrap_err()
-    }
-
-    #[test]
-    fn test_projection_initial_seek_error() {
-        // fails on the first `stream_position`, before reading the schema
-        assert!(matches!(projection_with_seeks(0), Error::IO(_, _)));
-    }
-
-    #[test]
-    fn test_projection_rewind_seek_error() {
-        // fails on the second `stream_position`, after reading the schema
-        assert!(matches!(projection_with_seeks(1), Error::IO(_, _)));
-    }
-
-    /// Reports position 0 on the first `stream_position` and `u64::MAX` on the
-    /// second, so the header offset can't fit in an `i64`.
-    #[derive(Debug)]
-    struct HugePosReader {
-        data: Cursor<Vec<u8>>,
-        seeks: usize,
-    }
-
-    impl Read for HugePosReader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.data.read(buf)
-        }
-    }
-
-    impl Seek for HugePosReader {
-        fn seek(&mut self, _: std::io::SeekFrom) -> std::io::Result<u64> {
-            self.seeks += 1;
-            if self.seeks == 1 { Ok(0) } else { Ok(u64::MAX) }
-        }
-    }
-
-    #[test]
-    fn test_large_header_error() {
-        let valid = write_avro("col", Schema::Int, [1, 2, 3])
-            .unwrap()
-            .into_inner();
-        let err = Reader::try_new(
-            [ok(HugePosReader {
-                data: Cursor::new(valid),
-                seeks: 0,
-            })],
-            ReadOptions {
-                projection: Some(&["col"][..]),
-                ..ReadOptions::default()
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::LargeHeader), "{err:?}");
-    }
-
-    /// Allows `stream_position` (a `Current(0)` seek) but fails any real seek, so
-    /// the post-schema rewind fails once the header is too big to stay buffered.
-    #[derive(Debug)]
-    struct NoRelativeSeek(Cursor<Vec<u8>>);
-
-    impl Read for NoRelativeSeek {
+    impl Read for NoSeek {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             self.0.read(buf)
         }
     }
 
-    impl Seek for NoRelativeSeek {
-        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-            match pos {
-                std::io::SeekFrom::Current(0) => self.0.seek(pos),
-                _ => Err(std::io::Error::other("no relative seek")),
-            }
+    impl Seek for NoSeek {
+        fn seek(&mut self, _: std::io::SeekFrom) -> std::io::Result<u64> {
+            Err(std::io::Error::other("no seek"))
         }
+    }
+
+    fn project_without_seeking(name: &str) -> Result<RecordBatch, Error> {
+        let valid = write_avro(name, Schema::Int, [1, 2, 3])
+            .unwrap()
+            .into_inner();
+        let reader = Reader::try_new(
+            [ok(BufReader::new(NoSeek(Cursor::new(valid))))],
+            ReadOptions {
+                projection: Some(names(&[name])),
+                ..ReadOptions::default()
+            },
+        )?;
+        Ok(collect_one(reader))
+    }
+
+    /// Selecting columns rewinds inside the buffer, without seeking the source.
+    #[test]
+    fn test_projection_doesnt_seek() {
+        let frame = project_without_seeking("col").unwrap();
+        assert_eq!(frame.num_rows(), 3);
     }
 
     #[test]
     fn test_projection_large_header_rewind_error() {
         // a long field name makes the header exceed the 8 KiB BufReader buffer
-        let name = "f".repeat(9000);
-        let valid = write_avro(&name, Schema::Int, [1, 2, 3])
-            .unwrap()
-            .into_inner();
-        assert!(valid.len() > 8192, "header should exceed the buffer");
-        let err = Reader::try_new(
-            [ok(NoRelativeSeek(Cursor::new(valid)))],
-            ReadOptions {
-                projection: Some(&[name.as_str()][..]),
-                ..ReadOptions::default()
-            },
-        )
-        .unwrap_err();
+        let err = project_without_seeking(&"f".repeat(9000)).unwrap_err();
         assert!(matches!(err, Error::IO(_, _)), "{err:?}");
     }
 
@@ -681,7 +632,7 @@ mod tests {
             ))],
         )
         .unwrap();
-        let frame = collect_one(Reader::try_new([ok(buff)], FullReadOptions::default()).unwrap());
+        let frame = collect_one(Reader::try_new([ok(buff)], ReadOptions::default()).unwrap());
         assert_eq!(
             frame.column(0).data_type(),
             &DataType::Interval(IntervalUnit::MonthDayNano)
@@ -698,7 +649,7 @@ mod tests {
         writer.flush().unwrap();
         mem::drop(writer);
         buff.set_position(0);
-        let err = Reader::try_new([ok(buff)], FullReadOptions::default()).unwrap_err();
+        let err = Reader::try_new([ok(buff)], ReadOptions::default()).unwrap_err();
         assert!(matches!(err, Error::Arrow(_)));
     }
 
@@ -706,9 +657,9 @@ mod tests {
     #[test]
     fn test_missing_columns_error() {
         let res = Reader::try_new(
-            [File::open("./resources/food.avro")],
+            [File::open("./resources/food.avro").map(BufReader::new)],
             ReadOptions {
-                projection: Some(&["missing"][..]),
+                projection: Some(names(&["missing"])),
                 ..ReadOptions::default()
             },
         );
@@ -724,7 +675,7 @@ mod tests {
             [ok(one), ok(two)],
             ReadOptions {
                 batch_size: 2,
-                ..FullReadOptions::default()
+                ..ReadOptions::default()
             },
         )
         .unwrap();
@@ -741,7 +692,7 @@ mod tests {
             [ok(one), ok(two)],
             ReadOptions {
                 batch_size: 2,
-                projection: Some(&["x"][..]),
+                projection: Some(names(&["x"])),
                 ..ReadOptions::default()
             },
         )
@@ -750,8 +701,7 @@ mod tests {
         assert!(matches!(err, Error::ColumnNotFound(_)));
     }
 
-    /// Two sources sharing a column name but with different types are caught
-    /// even under a projection, which used to bypass the schema check.
+    /// Sources whose selected column differs in type are caught under a projection.
     #[test]
     fn test_different_types_projection() {
         let one = write_avro("x", Schema::Int, [1, 2, 3]).unwrap();
@@ -761,7 +711,7 @@ mod tests {
             [ok(one), ok(two)],
             ReadOptions {
                 batch_size: 2,
-                projection: Some(&["x"][..]),
+                projection: Some(names(&["x"])),
                 ..ReadOptions::default()
             },
         )
@@ -771,8 +721,7 @@ mod tests {
     }
 
     /// Projecting a logical-typed column keeps its logical arrow type instead of
-    /// decoding it as the raw underlying primitive (parsing canonical form used
-    /// to strip `logicalType`).
+    /// decoding it as the raw underlying primitive.
     #[test]
     fn test_projection_preserves_logical_type() {
         let buff = write_avro("d", Schema::Date, [Value::Date(18262)]).unwrap();
@@ -780,7 +729,7 @@ mod tests {
             Reader::try_new(
                 [ok(buff)],
                 ReadOptions {
-                    projection: Some(&["d"][..]),
+                    projection: Some(names(&["d"])),
                     ..ReadOptions::default()
                 },
             )
