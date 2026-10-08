@@ -188,7 +188,7 @@ def test_source_exception_type_preserved() -> None:
 
         yield Reader()  # type: ignore[misc]
 
-    source = AvroSource([factory])
+    source = AvroSource([factory], False, False)
     with pytest.raises(Interrupted, match="connection dropped"):
         source.schema()
 
@@ -207,6 +207,27 @@ def test_empty_directory_errors(tmp_path: Path) -> None:
     """Scanning an empty directory raises rather than yielding no data."""
     with pytest.raises(FileNotFoundError, match="no files found in directory"):
         scan_avro(str(tmp_path))
+
+
+def test_utf8_view_schema_matches_data() -> None:
+    """The declared schema follows `utf8_view`, which the streaming engine checks."""
+    buff = BytesIO()
+    fastavro.writer(  # type: ignore
+        buff,
+        {
+            "type": "record",
+            "name": "ids",
+            "fields": [
+                {"name": "id", "type": {"type": "string", "logicalType": "uuid"}}
+            ],
+        },
+        [{"id": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6"}],
+    )
+    for utf8_view, dtype in [(False, pl.Binary), (True, pl.String)]:
+        buff.seek(0)
+        lazy = scan_avro(buff, utf8_view=utf8_view)
+        assert lazy.collect_schema() == {"id": dtype}
+        assert lazy.collect(engine="streaming").schema == {"id": dtype}
 
 
 @pytest.mark.xfail(

@@ -2,7 +2,7 @@
 
 use super::Error;
 use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader as ArrowAvroReader, ReaderBuilder, read_header_info};
 use std::io::{BufRead, Seek};
 use std::iter::FusedIterator;
@@ -53,6 +53,14 @@ impl ReadOptions {
             .with_utf8_view(self.utf8_view)
             .with_strict_mode(self.strict)
             .with_batch_size(self.batch_size)
+    }
+
+    /// Get the arrow schema these options read every column of an avro file as
+    ///
+    /// # Errors
+    /// If the avro schema can't be read, or any errors from the reader
+    pub fn schema<R: BufRead>(&self, reader: R) -> Result<SchemaRef, Error> {
+        Ok(self.builder().build(reader)?.schema())
     }
 
     fn create_reader<R: BufRead + Seek>(&self, mut reader: R) -> Result<ArrowAvroReader<R>, Error> {

@@ -42,12 +42,12 @@ class AvroSource:
     def __init__(
         self,
         sources: list[str | Callable[[], AbstractContextManager[BinaryIO]]],
+        strict: bool,
+        utf8_view: bool,
     ) -> None: ...
     def schema(self) -> RecordBatch: ...
     def batch_iter(
         self,
-        strict: bool,
-        utf8_view: bool,
         batch_size: int,
         with_columns: list[str] | None,
     ) -> AvroIter: ...
