@@ -24,7 +24,7 @@ pyo3 = [
 ]
 
 [dependencies]
-arrow = { version = "59.0", default-features = false }
+arrow = { version = "60.0", default-features = false }
 arrow-avro = { version = "59.0", default-features = false }
 pyo3 = { version = "0.29", optional = true, features = ["abi3-py310"] }
 pyo3-arrow = { version = "0.19", optional = true, default-features = false }
