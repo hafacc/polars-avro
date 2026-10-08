@@ -9,10 +9,7 @@ from urllib.parse import urlparse
 
 import fsspec  # type: ignore[reportMissingTypeStubs]
 
-# A factory returning a context manager that yields a seekable binary file. The
-# reader calls it once per scan (schema pass, each data pass, every re-collect);
-# cloud factories open a fresh handle each time, the buffer factory rewinds a
-# shared one.
+# Returns a context manager yielding a seekable binary file; called once per scan.
 SourceFactory = Callable[[], AbstractContextManager[BinaryIO]]
 
 

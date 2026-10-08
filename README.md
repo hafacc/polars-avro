@@ -37,13 +37,14 @@ There are two main exports: [`Reader`] for iterating arrow `RecordBatch`es from
 avro sources, and [`Writer`] for writing `RecordBatch`es to an avro file.
 
 ```rs
-use polars_avro::{FullReadOptions, Reader, Writer};
+use polars_avro::{ReadOptions, Reader, Writer};
 use std::fs::File;
+use std::io::BufReader;
 
 // `Reader` yields arrow `RecordBatch`es from one or more avro sources
 let mut reader = Reader::try_new(
-    [File::open("data.avro")],
-    FullReadOptions::default(),
+    [File::open("data.avro").map(BufReader::new)],
+    ReadOptions::default(),
 ).unwrap();
 
 // copy them into a new file; `Writer` needs a schema up front, so take it

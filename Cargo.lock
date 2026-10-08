@@ -54,10 +54,7 @@ checksum = "312c1ea69e5fe9966e0029fb95aca8790100b85aff4f0d3b00a9337c74069a9c"
 dependencies = [
  "bigdecimal",
  "bon",
- "bzip2",
- "crc32fast",
  "digest",
- "liblzma",
  "log",
  "miniz_oxide",
  "num-bigint 0.4.8",
@@ -68,11 +65,9 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "snap",
  "strum",
  "thiserror 2.0.21",
  "uuid",
- "zstd",
 ]
 
 [[package]]
@@ -1002,7 +997,6 @@ dependencies = [
  "arrow-avro",
  "pyo3",
  "pyo3-arrow",
- "serde_json",
  "uuid",
 ]
 

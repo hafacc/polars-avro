@@ -60,9 +60,7 @@ class AvroWriter:
         return self
 
     def write(self, batch: DataFrame) -> None:
-        # polars exports Null arrays with a buffer the Arrow spec says they
-        # don't have, which arrow-rs rejects; pyarrow re-exports them correctly
-        # https://github.com/pola-rs/polars/issues/22934
+        # arrow-rs rejects polars' own export of Null arrays (pola-rs/polars#22934)
         table = batch.to_arrow()
         if self._sink is None:
             self._sink = self._create(table)
