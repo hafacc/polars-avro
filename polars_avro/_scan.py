@@ -63,6 +63,9 @@ def scan_avro(  # noqa: PLR0913
         with string views internally, ``True`` is likely faster.
     storage_options : Extra options forwarded to ``fsspec.open`` for cloud URLs.
     """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+
     # one caller-ordered list, so row order follows argument order
     opts = storage_options or {}
     all_sources: list[str | SourceFactory] = []

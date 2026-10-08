@@ -209,6 +209,12 @@ def test_empty_directory_errors(tmp_path: Path) -> None:
         scan_avro(str(tmp_path))
 
 
+def test_batch_size_must_be_positive() -> None:
+    """A batch size that could never yield rows is rejected."""
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        scan_avro("resources/food.avro", batch_size=0)
+
+
 def test_utf8_view_schema_matches_data() -> None:
     """The declared schema follows `utf8_view`, which the streaming engine checks."""
     buff = BytesIO()
