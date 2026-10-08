@@ -1,6 +1,5 @@
 //! Internal error types
 
-use apache_avro::Error as AvroError;
 use arrow::datatypes::Schema;
 use arrow::error::ArrowError;
 use arrow_avro::errors::AvroError as ArrowAvroError;
@@ -22,14 +21,8 @@ pub enum Error<E = Infallible> {
     Arrow(ArrowError),
     /// An error from the arrow-avro library
     ArrowAvro(ArrowAvroError),
-    /// An error from parsing the avro header
-    Avro(AvroError),
-    /// An error serializing a projected schema back to json
-    Json(serde_json::Error),
     /// Cannot scan empty sources
     EmptySources,
-    /// Top level avro schema must be a record
-    NonRecordSchema,
     /// Happens when an avro header doesn't fit in an i64
     LargeHeader,
     /// If not all schemas in a batch were identical
@@ -41,8 +34,6 @@ pub enum Error<E = Infallible> {
     },
     /// If a column wasn't found in the schema
     ColumnNotFound(String),
-    /// Column index is out of bounds
-    ColumnIndexOutOfBounds(usize),
     /// I/O related errors
     IO(io::Error, String),
     /// An error from the caller-supplied source iterator, forwarded unchanged
@@ -59,16 +50,12 @@ impl Error<Infallible> {
         match self {
             Error::Arrow(err) => Error::Arrow(err),
             Error::ArrowAvro(err) => Error::ArrowAvro(err),
-            Error::Avro(err) => Error::Avro(err),
-            Error::Json(err) => Error::Json(err),
             Error::EmptySources => Error::EmptySources,
-            Error::NonRecordSchema => Error::NonRecordSchema,
             Error::LargeHeader => Error::LargeHeader,
             Error::NonMatchingSchemas { expected, actual } => {
                 Error::NonMatchingSchemas { expected, actual }
             }
             Error::ColumnNotFound(col) => Error::ColumnNotFound(col),
-            Error::ColumnIndexOutOfBounds(ind) => Error::ColumnIndexOutOfBounds(ind),
             Error::IO(err, path) => Error::IO(err, path),
             Error::User(never) => match never {},
         }
@@ -80,10 +67,7 @@ impl<E: Display> Display for Error<E> {
         match self {
             Error::Arrow(e) => write!(f, "Error from arrow: {e}"),
             Error::ArrowAvro(e) => write!(f, "Error from arrow-avro: {e}"),
-            Error::Avro(e) => write!(f, "Error from avro: {e}"),
-            Error::Json(e) => write!(f, "Error serializing schema: {e}"),
             Error::EmptySources => write!(f, "Cannot scan empty sources"),
-            Error::NonRecordSchema => write!(f, "Top level avro schema must be a record"),
             Error::LargeHeader => write!(f, "Avro header is too large"),
             Error::NonMatchingSchemas { expected, actual } => {
                 write!(f, "schemas differ:")?;
@@ -116,9 +100,6 @@ impl<E: Display> Display for Error<E> {
                 Ok(())
             }
             Error::ColumnNotFound(col) => write!(f, "Column \"{col}\" wasn't found in the schema"),
-            Error::ColumnIndexOutOfBounds(ind) => {
-                write!(f, "Column index {ind} is out of bounds")
-            }
             Error::IO(err, path) => write!(f, "Problem with {path}: {err}"),
             Error::User(err) => write!(f, "{err}"),
         }
@@ -136,18 +117,6 @@ impl<E> From<ArrowError> for Error<E> {
 impl<E> From<ArrowAvroError> for Error<E> {
     fn from(value: ArrowAvroError) -> Self {
         Self::ArrowAvro(value)
-    }
-}
-
-impl<E> From<AvroError> for Error<E> {
-    fn from(value: AvroError) -> Self {
-        Self::Avro(value)
-    }
-}
-
-impl<E> From<serde_json::Error> for Error<E> {
-    fn from(value: serde_json::Error) -> Self {
-        Self::Json(value)
     }
 }
 
@@ -187,19 +156,13 @@ mod tests {
             Field::new("changed", ArrowDataType::Utf8, false),
             Field::new("added", ArrowDataType::Boolean, false),
         ]));
-        let avro_err = apache_avro::Schema::parse_str("not a schema").unwrap_err();
-        let json_err = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
         for err in [
             Error::Arrow(ArrowError::NotYetImplemented("test".into())),
             Error::ArrowAvro(ArrowAvroError::General("test".into())),
-            Error::Avro(avro_err),
-            Error::Json(json_err),
             Error::EmptySources,
-            Error::NonRecordSchema,
             Error::LargeHeader,
             Error::NonMatchingSchemas { expected, actual },
             Error::ColumnNotFound("missing".into()),
-            Error::ColumnIndexOutOfBounds(7),
             Error::IO(io::Error::other("boom"), "path".into()),
         ] {
             assert_ne!(format!("{err}"), "");
@@ -217,16 +180,8 @@ mod tests {
             Error::ArrowAvro(_)
         ));
         assert!(matches!(
-            Error::from(apache_avro::Schema::parse_str("not a schema").unwrap_err()),
-            Error::Avro(_)
-        ));
-        assert!(matches!(
             Error::from(io::Error::other("boom")),
             Error::IO(_, _)
-        ));
-        assert!(matches!(
-            Error::from(serde_json::from_str::<serde_json::Value>("{").unwrap_err()),
-            Error::Json(_)
         ));
     }
 

@@ -24,8 +24,8 @@ pub use arrow_avro::compression::CompressionCodec;
 /// Error type for avro operations.
 pub use error::Error;
 /// Configuration for reading avro files.
-pub use scan::{FullReadOptions, ReadOptions, Reader};
-/// Schema projection and retrieval utilities.
-pub use schema::{IndProj, NameProj, Projection, get_schema};
+pub use scan::{Projection, ReadOptions, Reader};
+/// Schema retrieval.
+pub use schema::get_schema;
 /// Incremental avro file writer.
 pub use sink::Writer;

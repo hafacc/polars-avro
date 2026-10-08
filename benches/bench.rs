@@ -7,7 +7,7 @@ use arrow::array::{
     RecordBatch, StringArray,
 };
 use arrow::datatypes::{Field, Schema};
-use polars_avro::{FullReadOptions, ReadOptions, Reader, Writer};
+use polars_avro::{Projection, ReadOptions, Reader, Writer};
 use std::convert::Infallible;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -123,12 +123,9 @@ macro_rules! bench_shape {
                 b.iter(move || {
                     buff.set_position(0);
                     test::black_box(
-                        Reader::try_new(
-                            [Ok::<_, Infallible>(&mut buff)],
-                            FullReadOptions::default(),
-                        )
-                        .unwrap()
-                        .collect::<Vec<_>>(),
+                        Reader::try_new([Ok::<_, Infallible>(&mut buff)], ReadOptions::default())
+                            .unwrap()
+                            .collect::<Vec<_>>(),
                     )
                 });
             }
@@ -149,14 +146,14 @@ macro_rules! bench_projection {
                     .unwrap()
                     .write(&frame)
                     .unwrap();
-                let columns: Vec<&str> = vec![$($col),+];
+                let columns: Vec<String> = vec![$($col.to_owned()),+];
                 b.iter(move || {
                     buff.set_position(0);
                     test::black_box(
                         Reader::try_new(
                             [Ok::<_, Infallible>(&mut buff)],
                             ReadOptions {
-                                projection: Some(&columns[..]),
+                                projection: Some(Projection::Names(columns.clone())),
                                 ..ReadOptions::default()
                             },
                         )
@@ -189,7 +186,7 @@ macro_rules! bench_read_options {
                             [Ok::<_, Infallible>(&mut buff)],
                             ReadOptions {
                                 $($field: $value,)*
-                                ..FullReadOptions::default()
+                                ..ReadOptions::default()
                             },
                         )
                         .unwrap()

@@ -1,4 +1,4 @@
-use super::{FullReadOptions, ReadOptions, Reader, Writer, get_schema};
+use super::{ReadOptions, Reader, Writer, get_schema};
 use arrow::array::{
     Array, BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
     RecordBatch, StringArray,
@@ -29,7 +29,7 @@ fn deserialize(buff: Vec<u8>) -> RecordBatch {
         [ok(cursor)],
         ReadOptions {
             batch_size: 2,
-            ..FullReadOptions::default()
+            ..ReadOptions::default()
         },
     )
     .unwrap();

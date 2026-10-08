@@ -209,6 +209,37 @@ def test_empty_directory_errors(tmp_path: Path) -> None:
         scan_avro(str(tmp_path))
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="arrow-avro's projection drops the definition of a type it still uses",
+)
+def test_projection_of_shared_named_type() -> None:
+    """A column can be selected without the column that defines its type."""
+    point = {
+        "type": "record",
+        "name": "Point",
+        "fields": [{"name": "x", "type": "int"}],
+    }
+    buff = BytesIO()
+    fastavro.writer(  # type: ignore
+        buff,
+        {
+            "type": "record",
+            "name": "base",
+            "fields": [
+                {"name": "first", "type": point},
+                {"name": "second", "type": "Point"},
+            ],
+        },
+        [{"first": {"x": 1}, "second": {"x": 2}}],
+    )
+    buff.seek(0)
+    expected = pl.from_dict(
+        {"second": [{"x": 2}]}, schema={"second": pl.Struct({"x": pl.Int32})}
+    )
+    assert read_avro(buff, columns=["second"]).equals(expected)
+
+
 def test_scan_in_memory() -> None:
     """Test that scan works for in memory buffers."""
     frame = pl.from_dict({"x": [1, 2, 3], "y": ["a", "b", "c"]})

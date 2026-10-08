@@ -1,10 +1,10 @@
 //! pyo3 bindings
 
-use super::{Error, ReadOptions, Reader, Writer, get_schema};
+use super::{Error, Projection, ReadOptions, Reader, Writer, get_schema};
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow_avro::compression::CompressionCodec;
-use pyo3::exceptions::{PyException, PyIOError, PyIndexError, PyKeyError, PyValueError};
+use pyo3::exceptions::{PyException, PyIOError, PyKeyError, PyValueError};
 use pyo3::types::{PyAnyMethods, PyBytes, PyBytesMethods, PyModule, PyModuleMethods};
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRef, PyResult, Python, create_exception, pyclass,
@@ -72,7 +72,7 @@ impl Drop for EnteredSource {
 #[derive(Debug)]
 enum ScanSource {
     File(File),
-    Opened(BufReader<EnteredSource>),
+    Opened(EnteredSource),
 }
 
 impl Read for ScanSource {
@@ -105,7 +105,7 @@ enum Source {
     Factory(Py<PyAny>),
 }
 
-/// Opens each [`Source`] into a [`ScanSource`] on demand, in order.
+/// Opens each [`Source`] into a buffered [`ScanSource`] on demand, in order.
 ///
 /// Local paths open natively; factories are called to get a fresh context
 /// manager which is entered (`__enter__`) here and exited when the resulting
@@ -117,14 +117,14 @@ struct SourceIter {
 }
 
 impl Iterator for SourceIter {
-    type Item = Result<ScanSource, PyErr>;
+    type Item = Result<BufReader<ScanSource>, PyErr>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let source = self.sources.get(self.idx)?;
         self.idx += 1;
         Some(match source {
             Source::Path(path) => match File::open(path) {
-                Ok(file) => Ok(ScanSource::File(file)),
+                Ok(file) => Ok(BufReader::new(ScanSource::File(file))),
                 Err(err) => Err(PyIOError::new_err(format!("I/O error: {path}: {err}"))),
             },
             Source::Factory(factory) => Python::attach(|py| {
@@ -134,10 +134,10 @@ impl Iterator for SourceIter {
                     file: PyIO(Arc::new(file)),
                     ctx: ctx.unbind(),
                 };
-                Ok(ScanSource::Opened(BufReader::with_capacity(
+                Ok(BufReader::with_capacity(
                     PY_BUFFER_CAPACITY,
-                    entered,
-                )))
+                    ScanSource::Opened(entered),
+                ))
             }),
         })
     }
@@ -145,7 +145,7 @@ impl Iterator for SourceIter {
 
 #[pyclass]
 #[derive(Debug)]
-pub struct PyAvroIter(Fuse<Reader<ScanSource, SourceIter, Vec<String>>>);
+pub struct PyAvroIter(Fuse<Reader<BufReader<ScanSource>, SourceIter>>);
 
 #[pymethods]
 impl PyAvroIter {
@@ -255,7 +255,7 @@ impl AvroSource {
                 .next()
                 .ok_or(Error::EmptySources)?
                 .map_err(Error::User)?;
-            let schema = get_schema(BufReader::new(first)).map_err(Error::widen)?;
+            let schema = get_schema(first).map_err(Error::widen)?;
             self.schema = Some(schema.clone());
             Ok(schema)
         }
@@ -296,7 +296,7 @@ impl AvroSource {
                     strict,
                     utf8_view,
                     batch_size,
-                    projection: with_columns,
+                    projection: with_columns.map(Projection::Names),
                 },
             )?
             .fuse(),
@@ -396,21 +396,13 @@ impl From<Error<PyErr>> for PyErr {
                 Ok(py_err) => py_err,
                 Err(err) => PyIOError::new_err(format!("I/O error: {path}: {err}")),
             },
-            Error::Avro(err) => AvroError::new_err(err.to_string()),
-            Error::Json(err) => AvroError::new_err(err.to_string()),
             Error::EmptySources => EmptySources::new_err("must scan at least one source"),
-            Error::NonRecordSchema => {
-                AvroSpecError::new_err("top level avro schema must be a record")
-            }
             Error::LargeHeader => {
                 AvroSpecError::new_err("header was too large to effectively parse")
             }
             err @ Error::NonMatchingSchemas { .. } => AvroSpecError::new_err(format!("{err}")),
             Error::ColumnNotFound(col) => {
                 PyKeyError::new_err(format!("Column \"{col}\" not found in schema"))
-            }
-            Error::ColumnIndexOutOfBounds(ind) => {
-                PyIndexError::new_err(format!("Column index {ind} is out of bounds"))
             }
         }
     }
