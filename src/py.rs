@@ -1,16 +1,19 @@
 //! pyo3 bindings
 
 use super::{Error, Projection, ReadOptions, Reader, Writer};
-use arrow::array::RecordBatch;
+use arrow::array::{Array, RecordBatch, RecordBatchReader, StructArray};
 use arrow::datatypes::SchemaRef;
+use arrow::ffi::to_ffi;
+use arrow::ffi_stream::ArrowArrayStreamReader;
 use arrow_avro::compression::CompressionCodec;
 use pyo3::exceptions::{PyException, PyIOError, PyKeyError, PyValueError};
-use pyo3::types::{PyAnyMethods, PyBytes, PyBytesMethods, PyModule, PyModuleMethods};
+use pyo3::types::{
+    PyAnyMethods, PyBytes, PyBytesMethods, PyCapsule, PyCapsuleMethods, PyModule, PyModuleMethods,
+};
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRef, PyResult, Python, create_exception, pyclass,
     pymethods, pymodule,
 };
-use pyo3_arrow::{PyRecordBatch, PyTable};
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs::File;
@@ -143,6 +146,52 @@ impl Iterator for SourceIter {
     }
 }
 
+/// A record batch that Python can import without copying.
+#[pyclass(name = "RecordBatch", frozen)]
+#[derive(Debug)]
+pub struct PyRecordBatch(RecordBatch);
+
+#[pymethods]
+impl PyRecordBatch {
+    #[pyo3(signature = (requested_schema=None))]
+    #[allow(clippy::needless_pass_by_value)]
+    fn __arrow_c_array__<'py>(
+        &self,
+        py: Python<'py>,
+        requested_schema: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyCapsule>, Bound<'py, PyCapsule>)> {
+        // the interface lets a producer ignore the requested schema
+        let _ = requested_schema;
+        let array = StructArray::from(self.0.clone());
+        let (array, schema) = to_ffi(&array.to_data()).map_err(Error::<PyErr>::from)?;
+        Ok((
+            PyCapsule::new_with_value(py, schema, c"arrow_schema")?,
+            PyCapsule::new_with_value(py, array, c"arrow_array")?,
+        ))
+    }
+}
+
+/// Open the batches of a Python object that has `__arrow_c_stream__`.
+fn import_stream(stream: &Bound<'_, PyAny>) -> PyResult<ArrowArrayStreamReader> {
+    let capsule = stream
+        .call_method0("__arrow_c_stream__")?
+        .cast_into::<PyCapsule>()?;
+    let pointer = capsule.pointer_checked(Some(c"arrow_array_stream"))?;
+    // SAFETY: a capsule with this name holds an `ArrowArrayStream`, and `from_raw` moves it out,
+    // leaving a released stream for the capsule to drop
+    Ok(
+        unsafe { ArrowArrayStreamReader::from_raw(pointer.cast().as_ptr()) }
+            .map_err(Error::<PyErr>::from)?,
+    )
+}
+
+/// Read every batch of a Python object that has `__arrow_c_stream__`.
+fn import_batches(stream: &Bound<'_, PyAny>) -> PyResult<Vec<RecordBatch>> {
+    Ok(import_stream(stream)?
+        .collect::<Result<_, _>>()
+        .map_err(Error::<PyErr>::from)?)
+}
+
 #[pyclass]
 #[derive(Debug)]
 pub struct PyAvroIter(Fuse<Reader<BufReader<ScanSource>, SourceIter>>);
@@ -156,7 +205,7 @@ impl PyAvroIter {
     // Returning `Ok(None)` raises `StopIteration`.
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyRecordBatch>> {
         let batch = py.detach(|| self.0.next()).transpose()?;
-        Ok(batch.map(PyRecordBatch::from))
+        Ok(batch.map(PyRecordBatch))
     }
 }
 
@@ -286,7 +335,7 @@ impl AvroSource {
     #[pyo3(signature = ())]
     fn schema(&mut self, py: Python<'_>) -> PyResult<PyRecordBatch> {
         let schema = py.detach(|| self.get_schema())?;
-        Ok(RecordBatch::new_empty(schema).into())
+        Ok(PyRecordBatch(RecordBatch::new_empty(schema)))
     }
 
     #[pyo3(signature = (batch_size, with_columns))]
@@ -341,17 +390,17 @@ pub struct AvroFileSink(Writer<BufWriter<File>>);
 impl AvroFileSink {
     #[new]
     #[pyo3(signature = (path, schema, codec=None))]
-    fn new(path: &str, schema: PyTable, codec: Option<Codec>) -> Result<Self, PyErr> {
+    fn new(path: &str, schema: &Bound<'_, PyAny>, codec: Option<Codec>) -> Result<Self, PyErr> {
         Ok(Self(Writer::try_new(
             BufWriter::new(File::create(path)?),
-            schema.into_inner().1,
+            import_stream(schema)?.schema(),
             codec.map(CompressionCodec::from),
         )?))
     }
 
     #[pyo3(signature = (table))]
-    fn write(&mut self, py: Python<'_>, table: PyTable) -> Result<(), PyErr> {
-        let (batches, _) = table.into_inner();
+    fn write(&mut self, py: Python<'_>, table: &Bound<'_, PyAny>) -> Result<(), PyErr> {
+        let batches = import_batches(table)?;
         Ok(py.detach(|| batches.iter().try_for_each(|batch| self.0.write(batch)))?)
     }
 
@@ -369,17 +418,21 @@ pub struct AvroBuffSink(Writer<BufWriter<PyIO>>);
 impl AvroBuffSink {
     #[new]
     #[pyo3(signature = (buff, schema, codec=None))]
-    fn new(buff: Py<PyAny>, schema: PyTable, codec: Option<Codec>) -> Result<Self, PyErr> {
+    fn new(
+        buff: Py<PyAny>,
+        schema: &Bound<'_, PyAny>,
+        codec: Option<Codec>,
+    ) -> Result<Self, PyErr> {
         Ok(Self(Writer::try_new(
             BufWriter::new(PyIO(Arc::new(buff))),
-            schema.into_inner().1,
+            import_stream(schema)?.schema(),
             codec.map(CompressionCodec::from),
         )?))
     }
 
     #[pyo3(signature = (table))]
-    fn write(&mut self, py: Python<'_>, table: PyTable) -> Result<(), PyErr> {
-        let (batches, _) = table.into_inner();
+    fn write(&mut self, py: Python<'_>, table: &Bound<'_, PyAny>) -> Result<(), PyErr> {
+        let batches = import_batches(table)?;
         Ok(py.detach(|| batches.iter().try_for_each(|batch| self.0.write(batch)))?)
     }
 
@@ -428,6 +481,7 @@ create_exception!(exceptions, AvroSpecError, PyValueError);
 #[pymodule]
 fn _avro_rs(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<AvroSource>()?;
+    m.add_class::<PyRecordBatch>()?;
     m.add_class::<AvroFileSink>()?;
     m.add_class::<AvroBuffSink>()?;
     m.add_class::<Codec>()?;

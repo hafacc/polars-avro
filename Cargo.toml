@@ -15,7 +15,7 @@ xz = ["arrow-avro/xz"]
 zstd = ["arrow-avro/zstd"]
 pyo3 = [
     "dep:pyo3",
-    "dep:pyo3-arrow",
+    "arrow/ffi",
     "deflate",
     "snappy",
     "bzip2",
@@ -27,7 +27,6 @@ pyo3 = [
 arrow = { version = "59.0", default-features = false }
 arrow-avro = { version = "59.0", default-features = false }
 pyo3 = { version = "0.29", optional = true, features = ["abi3-py310"] }
-pyo3-arrow = { version = "0.19", optional = true, default-features = false }
 
 [dev-dependencies]
 apache-avro = "0.22.0"
