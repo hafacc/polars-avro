@@ -16,7 +16,7 @@ from pytest_benchmark.fixture import BenchmarkFixture
 import polars_avro
 
 # naive so it can feed both the tz-aware and tz-naive datetime schemas
-TIMESTAMP = datetime(2026, 1, 2, 3, 4, 5, 678000)  # noqa: DTZ001
+TIMESTAMP = datetime(2026, 1, 2, 3, 4, 5, 678000)
 DATE = TIMESTAMP.date()
 
 # ------------------------- #
