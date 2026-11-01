@@ -1404,16 +1404,16 @@ dev = [
 
 [[package]]
 name = "polars-fastavro"
-version = "0.6.1"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastavro", version = "1.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "fastavro", version = "1.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "polars" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/f6/2af8bd2e609efdb8282c1a403a602db47d8613bdba31d3f011b7d0898a41/polars_fastavro-0.6.1.tar.gz", hash = "sha256:3624a1058de2d5adc39c7a86442e036b8e81e7b53969a62e36d0f8f0338cdf68", size = 64192, upload-time = "2026-07-05T23:27:02.82Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/2f/b10ed42a7ae1367b5cf904f494726332428656dc9492acb0b2cc708e3d0f/polars_fastavro-0.7.0.tar.gz", hash = "sha256:859e7cee784e9796540cf10f0571f6595bd58835bdd596eea1abd6b069540ef9", size = 115651, upload-time = "2026-10-07T04:34:20.566Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5f/95/9eecb6841bad75b625146ee1ac17d17c3a780dd24345232a7f53386f083e/polars_fastavro-0.6.1-py3-none-any.whl", hash = "sha256:ed3f294abba5ce3d02d27a56333550de0686d06f28de9c9679ee52f03425573c", size = 8995, upload-time = "2026-07-05T23:27:01.565Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/d7/01fafe6fa67284ad37e87e3594a9b7d220a367725b97b9c6ed9c0110ebf6/polars_fastavro-0.7.0-py3-none-any.whl", hash = "sha256:08226b5db57a1cc69ae4a0d2565b03cd63c19e0fe4f52ede5037486cf422c5bd", size = 9113, upload-time = "2026-10-07T04:34:19.454Z" },
 ]
 
 [[package]]
