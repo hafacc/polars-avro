@@ -4,7 +4,7 @@ use super::{Error, Projection, ReadOptions, Reader, Writer};
 use arrow::array::{Array, RecordBatch, RecordBatchReader, StructArray};
 use arrow::datatypes::SchemaRef;
 use arrow::ffi::to_ffi;
-use arrow::ffi_stream::ArrowArrayStreamReader;
+use arrow::ffi_stream::RecordBatchStreamReader;
 use arrow_avro::compression::CompressionCodec;
 use pyo3::exceptions::{PyException, PyIOError, PyKeyError, PyValueError};
 use pyo3::types::{
@@ -172,7 +172,7 @@ impl PyRecordBatch {
 }
 
 /// Open the batches of a Python object that has `__arrow_c_stream__`.
-fn import_stream(stream: &Bound<'_, PyAny>) -> PyResult<ArrowArrayStreamReader> {
+fn import_stream(stream: &Bound<'_, PyAny>) -> PyResult<RecordBatchStreamReader> {
     let capsule = stream
         .call_method0("__arrow_c_stream__")?
         .cast_into::<PyCapsule>()?;
@@ -180,7 +180,7 @@ fn import_stream(stream: &Bound<'_, PyAny>) -> PyResult<ArrowArrayStreamReader> 
     // SAFETY: a capsule with this name holds an `ArrowArrayStream`, and `from_raw` moves it out,
     // leaving a released stream for the capsule to drop
     Ok(
-        unsafe { ArrowArrayStreamReader::from_raw(pointer.cast().as_ptr()) }
+        unsafe { RecordBatchStreamReader::from_raw(pointer.cast().as_ptr()) }
             .map_err(Error::<PyErr>::from)?,
     )
 }
@@ -280,7 +280,7 @@ impl Seek for PyIO {
     }
 }
 
-#[pyclass(skip_from_py_object)]
+#[pyclass]
 #[derive(Debug, Clone)]
 pub struct AvroSource {
     sources: Arc<[Source]>,
