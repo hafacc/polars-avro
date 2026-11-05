@@ -10,10 +10,8 @@ dependencies = ["polars>=2.0.0", "pyarrow>=14.0.0", "fsspec>=2024.0.0"]
 [dependency-groups]
 dev = [
     "fastavro>=1.10.0",
-    "ipykernel>=6.29.5",
     "maturin>=1.8.2",
     "myst-parser>=4.0.1",
-    "nbformat>=5.10.4",
     "polars-fastavro>=0.4.0",
     "pyright>=1.1.402",
     "pytest-benchmark>=5.1.0",
